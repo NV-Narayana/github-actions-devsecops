@@ -65,8 +65,7 @@ jobs:
       - name: Maven Build
         run: mvn clean package
 
-      # 6. SonarQube Analysis
-      - name: SonarQube Scan
+           - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
@@ -74,9 +73,9 @@ jobs:
           mvn org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
             -Dsonar.projectKey=github-actions-devsecops \
             -Dsonar.host.url="$SONAR_HOST_URL" \
-            -Dsonar.token="$SONAR_TOKEN" \
+            -Dsonar.login="$SONAR_TOKEN" \
             -Dsonar.qualitygate.wait=true
-
+            
       # 7. Docker Image Build
       - name: Docker Build
         run: |
