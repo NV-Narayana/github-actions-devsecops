@@ -92,3 +92,57 @@ jobs:
           exit-code: '1'
           severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
+    # FINAL STAGE: runs only if every job above succeeded
+  build-successful:
+    name: Build successful
+    runs-on: ubuntu-latest
+    needs: [gitleaks, build-sonar, trivy-fs, image-scan]
+    steps:
+      - name: Build success message
+        run: |
+          echo "=============================================="
+          echo " BUILD SUCCESSFUL"
+          echo "=============================================="
+          echo " Repository : ${{ github.repository }}"
+          echo " Branch     : ${{ github.ref_name }}"
+          echo " Commit     : ${{ github.sha }}"
+          echo " Triggered  : ${{ github.actor }}"
+          echo " Run number : ${{ github.run_number }}"
+          echo "=============================================="
+          echo " Gitleaks ........ PASSED"
+          echo " Maven build ..... PASSED"
+          echo " SonarQube ....... PASSED"
+          echo " Trivy fs ........ PASSED"
+          echo " Trivy image ..... PASSED"
+          echo "=============================================="
+
+      - name: Add summary to the run page
+        run: |
+          {
+            echo "## Build Successful"
+            echo ""
+            echo "| Stage | Result |"
+            echo "|---|---|"
+            echo "| Gitleaks secret scan | Passed |"
+            echo "| Maven build and tests | Passed |"
+            echo "| SonarQube quality gate | Passed |"
+            echo "| Trivy repo scan | Passed |"
+            echo "| Docker and Trivy image scan | Passed |"
+            echo ""
+            echo "**Commit:** \`${{ github.sha }}\`"
+            echo ""
+            echo "**Branch:** ${{ github.ref_name }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Runs only if any job failed
+  build-failed:
+    name: Build failed
+    runs-on: ubuntu-latest
+    needs: [gitleaks, build-sonar, trivy-fs, image-scan]
+    if: failure()
+    steps:
+      - name: Build failure message
+        run: |
+          echo "BUILD FAILED. Check the failed job above for the reason."
+          echo "## Build Failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Open the failed job in this run to see the cause." >> "$GITHUB_STEP_SUMMARY"
