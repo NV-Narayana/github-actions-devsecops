@@ -28,60 +28,62 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 2. Verify Project Structure
-      - name: Verify Maven Project
+      # 2. Verify Project Files
+      - name: Verify Project Structure
         run: |
           echo "Checking project files..."
           ls -la
 
-          if [ ! -f pom.xml ]; then
-            echo "ERROR: pom.xml not found in repository root"
+          test -f pom.xml || {
+            echo "ERROR: pom.xml not found"
             exit 1
-          fi
+          }
 
-          if [ ! -f Dockerfile ]; then
+          test -f Dockerfile || {
             echo "ERROR: Dockerfile not found"
             exit 1
-          fi
+          }
 
           echo "Project files verified successfully"
 
-      # 3. Gitleaks Secret Scan
+      # 3. Gitleaks Secret Scanning
       - name: Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 4. Setup Java
+      # 4. Setup Java 17
       - name: Setup Java
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
           cache: maven
-          cache-dependency-path: pom.xml
 
       # 5. Maven Build
       - name: Maven Build
-        run: mvn clean package
+        run: mvn --batch-mode clean verify
 
-           - name: SonarQube Scan
+      # 6. SonarQube Code Analysis
+      - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         run: |
-          mvn org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+          mvn --batch-mode \
+            org.sonarsource.scanner.maven:sonar-maven-plugin:5.9.0.7382:sonar \
             -Dsonar.projectKey=github-actions-devsecops \
             -Dsonar.host.url="$SONAR_HOST_URL" \
             -Dsonar.login="$SONAR_TOKEN" \
             -Dsonar.qualitygate.wait=true
-            
+
       # 7. Docker Image Build
       - name: Docker Build
         run: |
-          docker build -t devsecops-app:${{ github.sha }} .
+          docker build \
+            -t devsecops-app:${{ github.sha }} .
 
-      # 8. Trivy Container Scan
+      # 8. Trivy Container Vulnerability Scan
       - name: Trivy Image Scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
