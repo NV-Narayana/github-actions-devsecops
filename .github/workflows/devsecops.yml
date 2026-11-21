@@ -17,20 +17,17 @@ permissions:
 
 jobs:
 
-  # MAIN DEVSECOPS PIPELINE
-  devsecops:
-    name: DevSecOps Pipeline
+  # 1. VERIFY PROJECT STRUCTURE
+  verify-project:
+    name: Verify Project Files
     runs-on: ubuntu-latest
 
     steps:
-
-      # 1. Checkout Source Code
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. Verify Project Structure
       - name: Verify Project Files
         run: |
           echo "Checking project files..."
@@ -48,13 +45,35 @@ jobs:
 
           echo "Project files verified successfully"
 
-      # 3. Gitleaks Secret Scanning
+  # 2. GITLEAKS SECRET SCANNING
+  gitleaks-scan:
+    name: Gitleaks Scan
+    runs-on: ubuntu-latest
+    needs: verify-project
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 4. Setup Java 17
+  # 3. JAVA SETUP + MAVEN BUILD
+  maven-build:
+    name: Maven Build
+    runs-on: ubuntu-latest
+    needs: gitleaks-scan
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Setup Java
         uses: actions/setup-java@v6
         with:
@@ -62,12 +81,42 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # 5. Maven Build
       - name: Maven Build
         run: |
           mvn --batch-mode clean verify
 
-      # 6. SonarQube Code Analysis
+      - name: Upload Build Output
+        uses: actions/upload-artifact@v4
+        with:
+          name: maven-target
+          path: target/
+          retention-days: 1
+
+  # 4. SONARQUBE CODE ANALYSIS
+  sonarqube-scan:
+    name: SonarQube Scan
+    runs-on: ubuntu-latest
+    needs: maven-build
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Download Build Output
+        uses: actions/download-artifact@v4
+        with:
+          name: maven-target
+          path: target/
+
       - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -97,17 +146,54 @@ jobs:
             -Dsonar.login="$SONAR_TOKEN" \
             -Dsonar.qualitygate.wait=true
 
-      # 7. Docker Image Build
+  # 5. DOCKER IMAGE BUILD
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: sonarqube-scan
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download Build Output
+        uses: actions/download-artifact@v4
+        with:
+          name: maven-target
+          path: target/
+
       - name: Docker Build
         run: |
           docker build \
             -t devsecops-app:${{ github.sha }} .
 
-      # 8. Trivy Container Vulnerability Scan
+      - name: Save Docker Image
+        run: |
+          docker save devsecops-app:${{ github.sha }} -o devsecops-app.tar
+
+      - name: Upload Docker Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: devsecops-app.tar
+          retention-days: 1
+
+  # 6. TRIVY CONTAINER VULNERABILITY SCAN
+  trivy-scan:
+    name: Trivy Image Scan
+    runs-on: ubuntu-latest
+    needs: docker-build
+
+    steps:
+      - name: Download Docker Image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
       - name: Trivy Image Scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: devsecops-app:${{ github.sha }}
+          input: devsecops-app.tar
           format: table
           exit-code: '1'
           severity: 'HIGH,CRITICAL'
@@ -117,8 +203,14 @@ jobs:
   build-successful:
     name: Build Successful
     runs-on: ubuntu-latest
-    needs: devsecops
-    if: ${{ needs.devsecops.result == 'success' }}
+    needs:
+      - verify-project
+      - gitleaks-scan
+      - maven-build
+      - sonarqube-scan
+      - docker-build
+      - trivy-scan
+    if: ${{ needs.trivy-scan.result == 'success' }}
 
     steps:
       - name: Build Success Message
@@ -126,10 +218,8 @@ jobs:
           echo "======================================"
           echo "       DEVSECOPS BUILD SUCCESS"
           echo "======================================"
-          echo "Checkout Code       : PASSED"
           echo "Project Verification: PASSED"
           echo "Gitleaks Scan       : PASSED"
-          echo "Java Setup          : PASSED"
           echo "Maven Build         : PASSED"
           echo "SonarQube Analysis  : PASSED"
           echo "Quality Gate        : PASSED"
@@ -147,10 +237,8 @@ jobs:
             echo ""
             echo "| Pipeline Stage | Status |"
             echo "|---|---|"
-            echo "| Checkout | PASSED |"
             echo "| Project Verification | PASSED |"
             echo "| Gitleaks | PASSED |"
-            echo "| Java Setup | PASSED |"
             echo "| Maven Build | PASSED |"
             echo "| SonarQube Analysis | PASSED |"
             echo "| Quality Gate | PASSED |"
@@ -168,8 +256,14 @@ jobs:
   build-failed:
     name: Build Failed
     runs-on: ubuntu-latest
-    needs: devsecops
-    if: ${{ always() && needs.devsecops.result == 'failure' }}
+    needs:
+      - verify-project
+      - gitleaks-scan
+      - maven-build
+      - sonarqube-scan
+      - docker-build
+      - trivy-scan
+    if: ${{ always() && contains(needs.*.result, 'failure') }}
 
     steps:
       - name: Build Failure Message
@@ -177,13 +271,23 @@ jobs:
           echo "======================================"
           echo "          DEVSECOPS BUILD FAILED"
           echo "======================================"
-          echo "One or more pipeline stages failed."
-          echo "Check the DevSecOps Pipeline logs."
+          echo "Verify   : ${{ needs.verify-project.result }}"
+          echo "Gitleaks : ${{ needs.gitleaks-scan.result }}"
+          echo "Maven    : ${{ needs.maven-build.result }}"
+          echo "Sonar    : ${{ needs.sonarqube-scan.result }}"
+          echo "Docker   : ${{ needs.docker-build.result }}"
+          echo "Trivy    : ${{ needs.trivy-scan.result }}"
           echo "======================================"
 
           {
             echo "## DEVSECOPS BUILD FAILED"
             echo ""
-            echo "One or more pipeline stages failed."
-            echo "Check the DevSecOps Pipeline job logs."
+            echo "| Pipeline Stage | Result |"
+            echo "|---|---|"
+            echo "| Project Verification | ${{ needs.verify-project.result }} |"
+            echo "| Gitleaks | ${{ needs.gitleaks-scan.result }} |"
+            echo "| Maven Build | ${{ needs.maven-build.result }} |"
+            echo "| SonarQube | ${{ needs.sonarqube-scan.result }} |"
+            echo "| Docker Build | ${{ needs.docker-build.result }} |"
+            echo "| Trivy Scan | ${{ needs.trivy-scan.result }} |"
           } >> "$GITHUB_STEP_SUMMARY"
