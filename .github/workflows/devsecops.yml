@@ -45,6 +45,7 @@ jobs:
 
           echo "Project files verified successfully"
 
+
   # 2. GITLEAKS SECRET SCANNING
   gitleaks-scan:
     name: Gitleaks Scan
@@ -61,6 +62,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
   # 3. JAVA SETUP + MAVEN BUILD
   maven-build:
@@ -92,6 +94,7 @@ jobs:
           path: target/
           retention-days: 1
 
+
   # 4. SONARQUBE CODE ANALYSIS
   sonarqube-scan:
     name: SonarQube Scan
@@ -117,11 +120,13 @@ jobs:
           name: maven-target
           path: target/
 
-            - name: SonarQube Scan
+      - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
         run: |
+
           if [ -z "$SONAR_HOST_URL" ]; then
             echo "ERROR: SONAR_HOST_URL secret is missing"
             exit 1
@@ -137,22 +142,24 @@ jobs:
             exit 1
           fi
 
-          # Strip trailing slash
           SONAR_HOST_URL="${SONAR_HOST_URL%/}"
 
           echo "Checking SonarQube connectivity..."
-          if ! curl -sS --max-time 15 -o /dev/null "$SONAR_HOST_URL/api/system/status"; then
-            echo "ERROR: Runner cannot reach SonarQube. Check that it is publicly accessible (firewall/security group/port)."
-            exit 1
-          fi
 
+          curl -fsS --connect-timeout 15 --max-time 30 \
+            "$SONAR_HOST_URL/api/system/status"
+
+          echo ""
           echo "Starting SonarQube analysis..."
 
           mvn --batch-mode \
             org.sonarsource.scanner.maven:sonar-maven-plugin:5.9.0.7382:sonar \
             -Dsonar.projectKey=github-actions-devsecops \
             -Dsonar.host.url="$SONAR_HOST_URL" \
+            -Dsonar.token="$SONAR_TOKEN" \
             -Dsonar.qualitygate.wait=true
+
+
   # 5. DOCKER IMAGE BUILD
   docker-build:
     name: Docker Build
@@ -185,6 +192,7 @@ jobs:
           path: devsecops-app.tar
           retention-days: 1
 
+
   # 6. TRIVY CONTAINER VULNERABILITY SCAN
   trivy-scan:
     name: Trivy Image Scan
@@ -206,10 +214,12 @@ jobs:
           severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
 
-  # FINAL SUCCESS JOB
+
+  # 7. FINAL SUCCESS JOB
   build-successful:
     name: Build Successful
     runs-on: ubuntu-latest
+
     needs:
       - verify-project
       - gitleaks-scan
@@ -217,7 +227,8 @@ jobs:
       - sonarqube-scan
       - docker-build
       - trivy-scan
-    if: ${{ needs.trivy-scan.result == 'success' }}
+
+    if: ${{ always() && needs.trivy-scan.result == 'success' && needs.sonarqube-scan.result == 'success' }}
 
     steps:
       - name: Build Success Message
@@ -259,10 +270,12 @@ jobs:
             echo "**Commit:** ${{ github.sha }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # FINAL FAILURE JOB
+
+  # 8. FINAL FAILURE JOB
   build-failed:
     name: Build Failed
     runs-on: ubuntu-latest
+
     needs:
       - verify-project
       - gitleaks-scan
@@ -270,6 +283,7 @@ jobs:
       - sonarqube-scan
       - docker-build
       - trivy-scan
+
     if: ${{ always() && contains(needs.*.result, 'failure') }}
 
     steps:
@@ -278,12 +292,14 @@ jobs:
           echo "======================================"
           echo "          DEVSECOPS BUILD FAILED"
           echo "======================================"
+
           echo "Verify   : ${{ needs.verify-project.result }}"
           echo "Gitleaks : ${{ needs.gitleaks-scan.result }}"
           echo "Maven    : ${{ needs.maven-build.result }}"
           echo "Sonar    : ${{ needs.sonarqube-scan.result }}"
           echo "Docker   : ${{ needs.docker-build.result }}"
           echo "Trivy    : ${{ needs.trivy-scan.result }}"
+
           echo "======================================"
 
           {
