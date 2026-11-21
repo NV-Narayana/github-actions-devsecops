@@ -117,7 +117,7 @@ jobs:
           name: maven-target
           path: target/
 
-      - name: SonarQube Scan
+            - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
@@ -137,15 +137,22 @@ jobs:
             exit 1
           fi
 
+          # Strip trailing slash
+          SONAR_HOST_URL="${SONAR_HOST_URL%/}"
+
+          echo "Checking SonarQube connectivity..."
+          if ! curl -sS --max-time 15 -o /dev/null "$SONAR_HOST_URL/api/system/status"; then
+            echo "ERROR: Runner cannot reach SonarQube. Check that it is publicly accessible (firewall/security group/port)."
+            exit 1
+          fi
+
           echo "Starting SonarQube analysis..."
 
           mvn --batch-mode \
             org.sonarsource.scanner.maven:sonar-maven-plugin:5.9.0.7382:sonar \
             -Dsonar.projectKey=github-actions-devsecops \
             -Dsonar.host.url="$SONAR_HOST_URL" \
-            -Dsonar.login="$SONAR_TOKEN" \
             -Dsonar.qualitygate.wait=true
-
   # 5. DOCKER IMAGE BUILD
   docker-build:
     name: Docker Build
